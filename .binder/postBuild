@@ -1,0 +1,6 @@
+#!/bin/bash
+echo $(pwd)
+wget https://github.com/official-stockfish/Stockfish/releases/download/sf_16/stockfish-ubuntu-x86-64.tar
+tar -vxf stockfish-ubuntu-x86-64.tar
+cd stockfish/src
+make -j build ARCH=x86-64-modern
