@@ -30,7 +30,7 @@ We define reasonable move (or not blunder) , as a move that does less damage tha
 We define a function $D(x)$ that returns $0$ if $x \ge 0$ and it is white's turn or $x \le 0$ and it is black turn. Otherwise, it is the identity. 
 This function is meant to filter out improving moves. 
 
-
+$C_1$ and $C_2$ some constants. 
 
 The method is the following: 
 
@@ -38,11 +38,13 @@ The method is the following:
 2. Evalute current position $\mu$ 
 3. If the position is worse than 200 centipawns (to each direction):
 
-$$ \sum_{r \in R } e^{-C (D(eval(r)-\mu))^2} $$
+$$ \sum_{r \in R } e^{-C_1 (D(eval(r)-\mu))^2} $$
 
 4. Otherwise:
 
-$$ \sum_{r \in R } e^{-C (\frac{ D(eval(r)-\mu)}{\mu})^2} $$
+$$ \sum_{r \in R } e^{-C_2 (\frac{ D(eval(r)-\mu)}{\mu})^2} $$
+
+
 
 ## Notice
 
