@@ -14,7 +14,7 @@ pip install jupter
 pip install python-chess
 git clone git@github.com:eyalk11/chess_stability.git
 ```
-3. Update STOCKFISHPATH in the notebook. 
+3. Update `STOCKFISHPATH` in the notebook. 
 
 ### Running 
 
