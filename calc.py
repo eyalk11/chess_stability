@@ -7,7 +7,7 @@ from chess import Board
 import chess.engine
 STOCKFISHDEPTH=10
 SIGMA= 5
-FRACFACTOR=4
+FRACFACTOR=2.5
 SCORECUTOFF=200
 class Calculator:
     def __init__(self,engine):
@@ -80,6 +80,8 @@ class Calculator:
             xx = await stream.list(self.calc_moves_score_int(cur, white, 1, depth, oldeval, lev))
             return xx
 
+        if asyncio.get_event_loop() is None:
+            asyncio.set_event_loop(asyncio.new_event_loop())
         lev = defaultdict(int)
         ll = asyncio.run(tmp())
         return ll, lev

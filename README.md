@@ -1,3 +1,4 @@
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/eyalk11/chess_stability/master?labpath=chessgame.ipynb)
 # Chess Stability
 Provide a new statistical tool for evaluting chess postions (in addition to standard score).
 This tool is stability score (0-100). And describes how easy it is to break position / how stable the position is.   
