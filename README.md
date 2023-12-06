@@ -54,7 +54,7 @@ $$V= \sum_{r \in R } e^{-C_1 (D(eval(r)-\mu))^2} $$
 
 $$V= \sum_{r \in R } e^{-C_2 (\frac{ D(eval(r)-\mu)}{\mu})^2} $$
 
-5. Denote stability by $\fraq{V}{|R|}$
+5. Denote stability by $\frac{V}{|R|}$
 
 This is a twist on gaussian distrubtion, taking current position as $\mu$. 
 
