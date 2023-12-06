@@ -44,6 +44,7 @@ $$ \sum_{r \in R } e^{-C_1 (D(eval(r)-\mu))^2} $$
 
 $$ \sum_{r \in R } e^{-C_2 (\frac{ D(eval(r)-\mu)}{\mu})^2} $$
 
+This is a twist on gaussian distrubtion, taking current position as $\mu$. 
 
 
 ## Notice
