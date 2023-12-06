@@ -1,20 +1,21 @@
 from collections import defaultdict
 import asyncio
-#b = Button(description='HideShow')
 import chess.engine
 import numpy as np
 from chess import Board
-import chess.engine
-STOCKFISHDEPTH=10
-SIGMA= 5
-FRACFACTOR=2.5
-SCORECUTOFF=200
+from aiostream import stream
+
 class Calculator:
+    STOCKFISHDEPTH = 10
+    SIGMA = 5
+    FRACFACTOR = 2.5
+    SCORECUTOFF = 200
+
     def __init__(self,engine):
         self.engine = engine
 
-    def get_score(self,b, white):
-        cc = self.engine.analyse(b, chess.engine.Limit(depth=STOCKFISHDEPTH))['score']
+    def get_score(self, b, white):
+        cc = self.engine.analyse(b, chess.engine.Limit(depth=self.STOCKFISHDEPTH))['score']
 
         if type(cc.relative) is chess.engine.Mate or type(cc.relative) is chess.engine.MateGiven:
             if cc.relative < chess.engine.Cp(-500):
@@ -28,23 +29,19 @@ class Calculator:
             breakpoint()
         return cc.relative.score() * (1 if white else (-1))
 
-
-
-    async def calc_moves_score_int(self,cur, white, curdep, maxdepth, oldeval, l):
-        from aiostream import stream
+    async def calc_moves_score_int(self, cur, white, curdep, maxdepth, oldeval, l):
         fen = cur.fen()
-        from aiostream import stream, pipe
 
         async with stream.iterate(cur.generate_legal_moves()).stream() as it:
-            async for z in it:  # stream.list(cur.generate_legal_moves()):
+            async for z in it:  
                 cur = Board(fen=fen)
                 cur.push(z)
                 ev = self.get_score(cur, not white)
                 g = ev - oldeval
-                if white and g < (-1) * SCORECUTOFF:  # too bad
+                if white and g < (-1) * self.SCORECUTOFF:  # too bad
                     cur.pop()
                     continue
-                elif g > SCORECUTOFF:
+                elif g > self.SCORECUTOFF:
                     cur.pop()
                     continue
 
@@ -58,10 +55,8 @@ class Calculator:
 
                 cur.pop()
 
-
-    def print_stats(self,curb, iswhite):
+    def print_stats(self, curb, iswhite):
         try:
-
             init, origg, stab, b, lev = self.calc_stability(curb, iswhite)
             ls = ['score', 'stability factor', 'num of reasonable moves', 'max(score) of reasonable',
                   'min(score)  of reasonable', 'faraction method', 'moves by depth']
@@ -72,10 +67,7 @@ class Calculator:
             import traceback
             print(traceback.format_exc())
 
-
     def calc_moves_score(self,cur, white, oldeval, depth=2):
-        from aiostream import stream
-
         async def tmp():
             xx = await stream.list(self.calc_moves_score_int(cur, white, 1, depth, oldeval, lev))
             return xx
@@ -85,7 +77,6 @@ class Calculator:
         lev = defaultdict(int)
         ll = asyncio.run(tmp())
         return ll, lev
-
 
     def calc_stability(self,cur_board, iswhite):
         '''
@@ -102,7 +93,7 @@ class Calculator:
         b = False
         if abs(init) > 200:
             b = True
-            g = g / (init / 100) * FRACFACTOR  # TODO:to make continous...
+            g = g / (init / 100) * self.FRACFACTOR  # TODO:to make continous...
         else:
             b = False
         # We only care about worsing moves, every good move can't contribute more than 1
@@ -111,7 +102,7 @@ class Calculator:
         else:
             g[g < 0] = 0
 
-        g = (-1) * np.square(g) * SIGMA
+        g = (-1) * np.square(g) * self.SIGMA
 
         g = np.exp(g)
         stab = np.sum(g) / len(g)
