@@ -37,13 +37,15 @@ $$ \sum_{r \in R } e^{-C (eval(r)-\mu)^2} $$
 
 4. Otherwise:
 
-$$ \sum_{r \in R } e^{-C (\frac{eval(r)-\mu}{\mu}^2}) $$
+$$ \sum_{r \in R } e^{-C (\frac{eval(r)-\mu}{\mu})^2} $$
 
 ## Notice
 
 It is licensed under [by-nc-sa](https://creativecommons.org/licenses/by-nc-sa/4.0/)
 
-Contact me for question eyalk@gmail.com 
+Contact me for questions
+
+eyalk@gmail.com 
 
 Eyal Karni
 
