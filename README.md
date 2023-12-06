@@ -48,11 +48,13 @@ The method is the following:
 2. Evalute current position $\mu$ 
 3. If the position is worse than 200 centipawns (to each direction):
 
-$$ \sum_{r \in R } e^{-C_1 (D(eval(r)-\mu))^2} $$
+$$V= \sum_{r \in R } e^{-C_1 (D(eval(r)-\mu))^2} $$
 
 4. Otherwise:
 
-$$ \sum_{r \in R } e^{-C_2 (\frac{ D(eval(r)-\mu)}{\mu})^2} $$
+$$V= \sum_{r \in R } e^{-C_2 (\frac{ D(eval(r)-\mu)}{\mu})^2} $$
+
+5. Denote stability by $\fraq{V}{|R|}$
 
 This is a twist on gaussian distrubtion, taking current position as $\mu$. 
 
