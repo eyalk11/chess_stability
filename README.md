@@ -23,17 +23,15 @@ cd chess_stability
 jupyter lab -> select notebook
 ```
 
-You can view your own games by adding a cell: 
-```
-display_game(pgn)
-```
+You can view your own games by adding a cell `display_game(pgn)`
+
 (This shit is  interactive!) 
 
-or evaluate a position by 
-```
-display_board(fen,iswhite)
-```
-By default, takes iswhite from fen. 
+or evaluate a position by `display_board(fen,iswhite)`.
+
+By default, takes `iswhite` from `fen`. 
+
+See examples.
 
 ## Method
 
