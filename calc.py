@@ -13,7 +13,7 @@ from sunfish import sunfish
 from sunfish.sunfish import render
 from sunfish.tools import uci
 from sunfish.sunfish import parse,Move
-
+from multiprocessing import cpu_count  
 uci.sunfish= sunfish 
 
 
@@ -27,22 +27,24 @@ class Calculator:
     SCORETHR = 40
     DODEPTH = 3
     WEAKTIME= 0.004
-    STOCKFISHSTRONG=0.1  
+    STOCKFISHSTRONG=0.04  
     @classmethod
     def from_engine_path(cls, path):
-        return Calculator(*cls.eng_from_engine_path(path))
+        return Calculator(path)
 
     @classmethod
     def eng_from_engine_path(cls, path):
         engine = chess.engine.SimpleEngine.popen_uci(path)
         weak = chess.engine.SimpleEngine.popen_uci(path)
-        #weak.configure({"UCI_LimitStrength": True, "UCI_Elo": cls.ELOWEAK})
+        # weak.configure({"UCI_LimitStrength": True, "UCI_Elo": cls.ELOWEAK})
         return (engine, weak)
 
-    def __init__(self, engine, weakengine):
-        self.engine = engine
-        self.weakengine = weakengine
+    def __init__(self, path):
+        self.path = path
+        self.enginedic = defaultdict(
+                lambda: Calculator.eng_from_engine_path(self.path))
         self.gameidf = str(randrange(0, 1000))
+        self.cpucores = cpu_count()
         self.posdic= {} 
 
     def get_score(self, b, white,weak=False,deprel=None):
@@ -50,13 +52,14 @@ class Calculator:
             f=1
         else:
             f= 2** (-10* deprel)
+        process_name = randrange(0, self.cpucores)
 
         limit = (
             chess.engine.Limit(depth=self.STOCKFISHDEPTH, time=self.STOCKFISHSTRONG * f * 1000)
             if not weak
-            else chess.engine.Limit(depth=self.STOCKFISHDEPTHWEAK, time=self.WEAKTIME * f * 1000 ) #  ,nodes=800 * f * 1000
+            else chess.engine.Limit(depth=self.STOCKFISHDEPTHWEAK, time=self.WEAKTIME * f * 1000  ,nodes=6800 * f * 1000)
         )
-        engine = self.weakengine if weak else self.engine
+        engine = self.enginedic[process_name][0] if not weak else self.enginedic[process_name][1]
         if not weak:
             cc = engine.analyse(b, limit, game=self.gameidf)["score"]
         else:
