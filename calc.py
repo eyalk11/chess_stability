@@ -26,7 +26,8 @@ class Calculator:
     ELOWEAK = 1620
     SCORETHR = 40
     DODEPTH = 3
-    WEAKTIME= 0.01
+    WEAKTIME= 0.004
+    STOCKFISHSTRONG=0.1  
     @classmethod
     def from_engine_path(cls, path):
         return Calculator(*cls.eng_from_engine_path(path))
@@ -51,7 +52,7 @@ class Calculator:
             f= 2** (-10* deprel)
 
         limit = (
-            chess.engine.Limit(depth=self.STOCKFISHDEPTH, time=5)
+            chess.engine.Limit(depth=self.STOCKFISHDEPTH, time=self.STOCKFISHSTRONG * f * 1000)
             if not weak
             else chess.engine.Limit(depth=self.STOCKFISHDEPTHWEAK, time=self.WEAKTIME * f * 1000 ) #  ,nodes=800 * f * 1000
         )
@@ -59,7 +60,7 @@ class Calculator:
         if not weak:
             cc = engine.analyse(b, limit, game=self.gameidf)["score"]
         else:
-            cc = engine.analyse(b, limit)["score"]
+            cc = engine.analyse(b, limit,game = str(randrange(0, 1000)) )["score"]
 
         #cc = engine.analyse(b, chess.engine.Limit(depth=self.STOCKFISHDEPTH if not weak else self.STOCKFISHDEPTHWEAK ),game=self.gameidf)['score']
 
@@ -74,6 +75,7 @@ class Calculator:
             print(cc.score())
             breakpoint()
         return cc.relative.score() * (1 if not white else (-1))
+
     def get_mov_sunfish(self,mov,ply=0):
         move=mov.uci()
 
@@ -81,7 +83,8 @@ class Calculator:
         if ply % 2 == 1:
             i, j = 119 - i, 119 - j
         return Move(i, j, prom)
-    async def calc_moves_score_int(self, fen, white, curdep, maxdepth, oldeval, original_score, levelsmap,seq=[]):
+
+    async def calc_moves_score_int(self, fen, white, curdep, maxdepth, oldeval, original_score, levelsmap,seq=[],lastlevellen=0,tored=False):
         # fen = cur.fen()
         cur = Board(fen=fen)
         oldeval = self.get_score(cur, white, curdep != maxdepth,curdep/maxdepth)
@@ -89,30 +92,50 @@ class Calculator:
 
         pos = uci.from_fen(*fen.split(" "))
         ls = list(cur.generate_legal_moves())
-        ls= [(pos.value(t:=self.get_mov_sunfish(m,not white)), m) for m in ls]
-        ls = sorted(ls, reverse=True,key=lambda x:x[0]) #
-        #if len(levelsmap[curdep]-1)+len(levelsmap[curdep])
-        if len(ls) > 30:
+        if tored: 
+            ls= [(pos.value(t:=self.get_mov_sunfish(m,not white)), m) for m in ls]
+            ls = sorted(ls, reverse=True,key=lambda x:x[0]) #
             ls = list(filter(lambda x: x[0] < self.SCORETHR, ls))
-            nu= int(40 * 2**((-1)*(curdep-1)))
-            if len(ls)>15:
-                ls= ls[:nu]
+            ls= ls[:5]
+        else:
+            ls= [(1, m) for m in ls] 
 
 
-        async with stream.iterate(ls).stream() as it:
-            async for _,z in it:
-                cur = Board(fen=fen)
-                #cur.turn=white
-                san = cur.san(z)
-                cur.push(z)
-                ev = self.get_score(cur, not white, curdep != maxdepth,curdep/maxdepth)
-                g = ev - oldeval
-                if g < (-1) * self.SCORECUTOFF:  # too bad
+        async def generate_moves():
+            async with stream.iterate(ls).stream() as it:
+                async for _,z in it:
+                    cur = Board(fen=fen)
+                    #cur.turn=white
+                    san = cur.san(z)
+                    cur.push(z)
+                    ev = self.get_score(cur, not white, curdep != maxdepth,curdep/maxdepth)
+                    g = ev - oldeval
+                    if g < (-1) * self.SCORECUTOFF:  # too bad
+                        cur.pop()
+                        continue
+                    elif g > self.SCORECUTOFF:
+                        cur.pop()
+                        continue
+                    yield cur.fen(), ev, g, san 
                     cur.pop()
-                    continue
-                elif g > self.SCORECUTOFF:
-                    cur.pop()
-                    continue
+
+        gen= [(curfen, ev, g, san) async for (curfen, ev, g, san) in generate_moves()]
+
+        if curdep > 2:
+            excepectnu= int(10 * 5**((curdep-1)))  
+            curlev= lastlevellen * len(gen)
+            if curlev  > excepectnu:
+                print('reduce', curdep, curlev, excepectnu)
+                tored=True
+                #reduce for best expceptnu best ev 
+                gen= sorted(gen, key=lambda x: x[1], reverse=True) 
+                gen= gen[:excepectnu] 
+                # ls = list(filter(lambda x: x[0] < self.SCORETHR, ls))
+                # nu= int(40 * 5**((-1)*(curdep-1)))
+                if curdep<maxdepth: 
+                    maxdepth -=1
+
+        for (curfen, ev, g, san) in gen:
 
                 levelsmap[curdep].add((";".join(seq+ [san]), ev,g))
                 #print((";".join(seq+ [san]), ev,g))
@@ -120,10 +143,9 @@ class Calculator:
                 if curdep == maxdepth:
                     yield ev
                 else:
-                    async for k in self.calc_moves_score_int(cur.fen(), not white, curdep + 1, maxdepth, ev, original_score, levelsmap,seq + [san]):
+                    async for k in self.calc_moves_score_int(curfen, not white, curdep + 1, maxdepth, ev, original_score, levelsmap,seq + [san],len(gen)*lastlevellen ,tored=False):
                         yield k
 
-                cur.pop()
 
     async def async_print_stats(self, curb, iswhite, full=True):
         if not full:
@@ -133,9 +155,12 @@ class Calculator:
 
         try:
             init, origg, stab, b, lev = await self.calc_stability(curb, iswhite )
+            mbydepth = dict(lev)
+            if len(str(dict(lev)))> 2000:
+                mbydepth = {k: len(v) for k, v in lev.items()} 
             ls = ['score', 'stability factor', 'num of reasonable moves', 'max(score) of reasonable',
                   'min(score)  of reasonable', 'faraction method', 'moves by depth']
-            tup = ('%.2f' % (init / 100), ('%.2f' % (stab * 100)) + '%', len(origg), max(origg), min(origg), b, dict(lev))
+            tup = ('%.2f' % (init / 100), ('%.2f' % (stab * 100)) + '%', len(origg), max(origg), min(origg), b, mbydepth)
             for a, b in zip(ls, tup):
                 print(a + ': ' + str(b))
         except Exception as e:
