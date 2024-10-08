@@ -8,7 +8,7 @@ from collections import defaultdict
 from queue import Queue
 
 import chess.engine
-import numpy as np
+# import numpy as np
 from chess import Board
 from multiprocessing import  Pool, Manager, cpu_count
 from multiprocessing.pool import ThreadPool
@@ -21,9 +21,11 @@ from sunfish.sunfish import parse,Move
 from multiprocessing import cpu_count  
 from sunfish.sunfish import parse, Move
 import multiprocessing as mp
+from execution_timer import ExecutionTimer, time_execution
 uci.sunfish = sunfish
 pool = None
 
+timer = ExecutionTimer()
 
 class Calculator:
     STOCKFISHDEPTH = 10
@@ -34,7 +36,7 @@ class Calculator:
     ELOWEAK = 1620
     SCORETHR = 40
     DODEPTH = 3
-    WEAKTIME= 0.002
+    WEAKTIME= 0.02
     STOCKFISHSTRONG=0.4
     @classmethod
     def from_engine_path(cls, path):
@@ -44,7 +46,7 @@ class Calculator:
     def eng_from_engine_path(cls, path):
         engine = chess.engine.SimpleEngine.popen_uci(path)
         weak = chess.engine.SimpleEngine.popen_uci(path)
-        #weak.configure({"UCI_LimitStrength": True, "UCI_Elo": cls.ELOWEAK})
+        # weak.configure({"UCI_LimitStrength": True, "UCI_Elo": cls.ELOWEAK})
         return (engine, weak)
 
     def __init__(self, path):
@@ -56,11 +58,17 @@ class Calculator:
             lambda: Calculator.eng_from_engine_path(self.path))
         self.pool = None
 
+    def printtimer(self):
+        global timer
+        print(timer.average_measured_time())
+
+
     def end(self):
         for k, v in self.enginedic.items():
             v[0].close()
             v[1].close()
 
+    @timer.time_execution
     def get_score(self, b, white, weak=False, deprel=None,gid=None):
         try:
             process_name = threading.current_thread().ident
@@ -106,6 +114,7 @@ class Calculator:
             i, j = 119 - i, 119 - j
         return Move(i, j, prom)
 
+    @timer.time_execution
     def calc_moves_score_worker(self, curfen, white, curdep, maxdepth, oldeval, lastlevellen, tored, levelsmap, seq, task_queue):
         cur = Board(fen=curfen)
         oldeval = self.get_score(cur, white, curdep !=
@@ -146,7 +155,6 @@ class Calculator:
                 results= results[:e]
                 if curdep < maxdepth:
                     maxdepth -= 1
-                    pass
 
         for (curfen, ev, g, san) in results:
             if curdep not in levelsmap:
@@ -166,6 +174,7 @@ class Calculator:
             if task_queue.empty() and not nsleep:
                 time.sleep(0.3)
                 print('ended')
+                break
 
     def calc_moves_score(self, cur, white, oldeval, depth=4):
         global pool
