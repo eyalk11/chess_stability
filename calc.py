@@ -7,11 +7,7 @@ import time
 from collections import defaultdict
 from queue import Queue
 import chess.engine
-try:
-    import numpy as np
-except:
-    pass #not really
-#import numpy as np
+import numpy as np
 from chess import Board
 from multiprocessing import  Pool, Manager, cpu_count
 from multiprocessing.pool import ThreadPool
@@ -24,9 +20,23 @@ from sunfish.sunfish import parse,Move
 from multiprocessing import cpu_count  
 from sunfish.sunfish import parse, Move
 import multiprocessing as mp
-from execution_timer import ExecutionTimer, time_execution
 uci.sunfish = sunfish
 pool = None
+
+from functools import wraps
+
+try:
+    from execution_timer import ExecutionTimer
+except:
+    class ExecutionTimer:
+        @staticmethod
+        def time_execution(f):
+            """Decorate by doing nothing."""
+            def decorated_function(*args, **kwargs):
+                return f(*args, **kwargs)
+            return decorated_function
+        def average_measured_time(self):
+            return {}
 
 timer = ExecutionTimer()
 
@@ -185,7 +195,7 @@ class Calculator:
 
         def myfunc(x):
             if x is None:
-                return []#raise StopIteration
+                return []
             return list(self.calc_moves_score_worker(*x ))
 
 
@@ -197,38 +207,8 @@ class Calculator:
             if len(ngen)==0:
                 break 
 
-        # self.pool.apply(self.process_tasks,(task_queue, result_queue, True))
-        # time.sleep(0.3)
-        # self.pool.starmap(self.process_tasks, [
-                 # (task_queue, result_queue)] * multiprocessing.cpu_count())
-            # self.pool.close()
-            # self.pool.join()
-
-        # results = []
-        # while not result_queue.empty():
-            # results.append(result_queue.get())
-
 
         return reslist, levelsmap
-    # def calc_moves_score(self, cur, white, oldeval, depth=2):
-        # with Manager() as manager:
-        # task_queue = manager.Queue()
-        # result_queue = manager.Queue()
-        # levelsmap = manager.dict(defaultdict(set))
-        # self.calc_moves_score_worker(cur.fen(), white, 1, depth, oldeval, 1, False, levelsmap, [], task_queue)
-
-        # with ProcessPoolExecutor(max_workers=cpu_count()) as executor:
-        # futures = [executor.submit(self.process_tasks, task_queue, result_queue) for _ in range(cpu_count())]
-
-        # # wait until all futures are done
-        # for future in concurrent.futures.as_completed(futures):
-        # pass
-
-        # results = []
-        # while not result_queue.empty():
-        # results.append(result_queue.get())
-
-        # return results
 
     def print_stats(self, curb, iswhite, full=True):
         if asyncio.get_event_loop() is None:
@@ -247,7 +227,7 @@ class Calculator:
             if len(str(dict(lev))) > 2000:
                 mbydepth = {k: len(v) for k, v in lev.items()}
             ls = ['score', 'stability factor', 'num of reasonable moves', 'max(score) of reasonable',
-                  'min(score) of reasonable', 'faraction method', 'moves by depth']
+                  'min(score) of reasonable', 'fraction method', 'moves by depth']
             tup = ('%.2f' % (init / 100), ('%.2f' % (stab * 100)) +
                    '%', len(origg), max(origg), min(origg), b, mbydepth)
             mystr=""
@@ -255,29 +235,12 @@ class Calculator:
                 mystr+=(a + ': ' + str(b)) + "\n"
             return mystr
 
-        except Exception as e:
+        except Exception:
             import traceback
             print(traceback.format_exc())
-    async def async_print_stats(self, curb, iswhite, full=True):
-        if not full:
-            lev = self.get_score(curb, iswhite)
-            print(f"score: {lev / 100}")
-            return
 
-        try:
-            init, origg, stab, b, lev = await self.calc_stability(curb, iswhite)
-            mbydepth = dict(lev)
-            if len(str(dict(lev))) > 2000:
-                mbydepth = {k: len(v) for k, v in lev.items()}
-            ls = ['score', 'stability factor', 'num of reasonable moves', 'max(score) of reasonable',
-                  'min(score) of reasonable', 'faraction method', 'moves by depth']
-            tup = ('%.2f' % (init / 100), ('%.2f' % (stab * 100)) +
-                   '%', len(origg), max(origg), min(origg), b, mbydepth)
-            for a, b in zip(ls, tup):
-                print(a + ': ' + str(b))
-        except Exception as e:
-            import traceback
-            print(traceback.format_exc())
+    async def async_print_stats(self, curb, iswhite, full=True):
+        print(await self.async_ret_stats(curb, iswhite, full))
 
     async def calc_stability(self, cur_board, iswhite):
         '''

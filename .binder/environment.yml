@@ -6,7 +6,8 @@ dependencies:
   - numpy
   - pip
   - pip:
-    - python-chess
+    - chess
     - numpy
     - jupyter
     - aiostream
+    - git+https://github.com/thomasahle/sunfish
