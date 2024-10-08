@@ -6,9 +6,12 @@ import concurrent.futures
 import time
 from collections import defaultdict
 from queue import Queue
-
 import chess.engine
-# import numpy as np
+try:
+    import numpy as np
+except:
+    pass #not really
+#import numpy as np
 from chess import Board
 from multiprocessing import  Pool, Manager, cpu_count
 from multiprocessing.pool import ThreadPool
@@ -31,7 +34,7 @@ class Calculator:
     STOCKFISHDEPTH = 10
     SIGMA = 5
     FRACFACTOR = 2.5
-    SCORECUTOFF = 100
+    SCORECUTOFF = 70
     STOCKFISHDEPTHWEAK = 3
     ELOWEAK = 1620
     SCORETHR = 40
@@ -46,7 +49,7 @@ class Calculator:
     def eng_from_engine_path(cls, path):
         engine = chess.engine.SimpleEngine.popen_uci(path)
         weak = chess.engine.SimpleEngine.popen_uci(path)
-        # weak.configure({"UCI_LimitStrength": True, "UCI_Elo": cls.ELOWEAK})
+        #weak.configure({"UCI_LimitStrength": True, "UCI_Elo": cls.ELOWEAK})
         return (engine, weak)
 
     def __init__(self, path):
@@ -115,14 +118,16 @@ class Calculator:
         return Move(i, j, prom)
 
     @timer.time_execution
-    def calc_moves_score_worker(self, curfen, white, curdep, maxdepth, oldeval, lastlevellen, tored, levelsmap, seq, task_queue):
+    def calc_moves_score_worker(self, curfen, white, curdep, maxdepth, oldeval, lastlevellen, tored, levelsmap, seq, reslist):
+        gid=str(randrange(0, 1000))
         cur = Board(fen=curfen)
         oldeval = self.get_score(cur, white, curdep !=
-                                 maxdepth, curdep / maxdepth)
+                                 maxdepth, curdep / maxdepth,gid)
 
         pos = uci.from_fen(*curfen.split(" "))
         ls = list(cur.generate_legal_moves())
-        if tored:
+        excepectnu = int(300 * 3 ** (curdep - 1))
+        if tored or (curdep>=3 and len(ls)*lastlevellen>=excepectnu):
             ls = [(pos.value(t := self.get_mov_sunfish(m, not white)), m)
                   for m in ls]
             ls = sorted(ls, reverse=True, key=lambda x: x[0])
@@ -131,74 +136,80 @@ class Calculator:
         else:
             ls = [(1, m) for m in ls]
 
-        results = []
+        moves = []
         for _, z in ls:
             san =  cur.san(z)
             cur.push(z)
             ev = self.get_score(cur, not white, curdep !=
-                                maxdepth, curdep / maxdepth)
+                                maxdepth, curdep / maxdepth,gid)
             g = ev - oldeval
             if g < (-1) * self.SCORECUTOFF or g > self.SCORECUTOFF:
                 cur.pop()
                 continue
-            results.append((cur.fen(), ev, g,san))
+            moves.append((cur.fen(), ev, g,san))
             cur.pop()
 
         # apply expectednu filter
         if curdep > 2:
-            excepectnu = int(10 * 5 ** (curdep - 1))
-            curlev = lastlevellen * len(results)
+            excepectnu = int(10 * 5 ** (curdep - 1))/2
+            curlev = lastlevellen * len(moves)
             if curlev > excepectnu:
                 tored = True
-                results = sorted(results, key=lambda x: x[2], reverse=True)
+                moves = sorted(moves, key=lambda x: x[2], reverse=True)
                 e=int(excepectnu/4)
-                results= results[:e]
+                moves= moves[:e]
                 if curdep < maxdepth:
                     maxdepth -= 1
 
-        for (curfen, ev, g, san) in results:
+        for (curfen, ev, g, san) in moves:
             if curdep not in levelsmap:
                 levelsmap[curdep] = []
             levelsmap[curdep].append((";".join(seq + [san]), ev, g))
             if curdep < maxdepth:
-                task_queue.put((curfen, not white, curdep + 1, maxdepth, ev, len(results)
-                               * lastlevellen, tored, levelsmap, seq + [san], task_queue))
+                yield (curfen, not white, curdep + 1, maxdepth, ev, len(moves)
+                               * lastlevellen, tored, levelsmap, seq + [san], reslist)
             else:
-                yield ev
-
-    def process_tasks(self, task_queue, result_queue,nsleep=False):
-        while not task_queue.empty():
-            task = task_queue.get(timeout=0.01)
-            for result in self.calc_moves_score_worker(*task):
-                result_queue.put(result)
-            if task_queue.empty() and not nsleep:
-                time.sleep(0.3)
-                print('ended')
-                break
+                reslist+= [ev]
 
     def calc_moves_score(self, cur, white, oldeval, depth=4):
         global pool
-        task_queue = Queue()
-        result_queue = Queue()
+        reslist=[]
         levelsmap = dict()
-        task_queue.put((cur.fen(), white, 1, depth, oldeval,
-                       1, False, levelsmap, [], task_queue))
+
         if self.pool is None:
             # creates a pool of cpu_count() processes
-            self.pool = ThreadPool(4)
-        self.pool.apply(self.process_tasks,(task_queue, result_queue, True))
-        time.sleep(0.3)
-        self.pool.starmap(self.process_tasks, [
-                 (task_queue, result_queue)] * multiprocessing.cpu_count())
+            self.pool = ThreadPool(4)#cpu_count())
+
+        ngen=self.calc_moves_score_worker(cur.fen(), white, 1, depth, oldeval,
+                       1, False, levelsmap, [], reslist)
+
+        def myfunc(x):
+            if x is None:
+                return []#raise StopIteration
+            return list(self.calc_moves_score_worker(*x ))
+
+
+        while True: 
+            gen=ngen
+            ngen=[]
+            for k in self.pool.imap_unordered(myfunc,gen,1 ):
+                ngen+=k
+            if len(ngen)==0:
+                break 
+
+        # self.pool.apply(self.process_tasks,(task_queue, result_queue, True))
+        # time.sleep(0.3)
+        # self.pool.starmap(self.process_tasks, [
+                 # (task_queue, result_queue)] * multiprocessing.cpu_count())
             # self.pool.close()
             # self.pool.join()
 
-        results = []
-        while not result_queue.empty():
-            results.append(result_queue.get())
+        # results = []
+        # while not result_queue.empty():
+            # results.append(result_queue.get())
 
 
-        return results, levelsmap
+        return reslist, levelsmap
     # def calc_moves_score(self, cur, white, oldeval, depth=2):
         # with Manager() as manager:
         # task_queue = manager.Queue()
@@ -224,6 +235,29 @@ class Calculator:
             asyncio.set_event_loop(asyncio.new_event_loop())
         asyncio.run(self.async_print_stats(curb, iswhite, full))
 
+    async def async_ret_stats(self, curb, iswhite, full=True):
+        if not full:
+            lev = self.get_score(curb, iswhite)
+            mystr=(f"score: {lev / 100}")
+            return mystr
+
+        try:
+            init, origg, stab, b, lev = await self.calc_stability(curb, iswhite)
+            mbydepth = dict(lev)
+            if len(str(dict(lev))) > 2000:
+                mbydepth = {k: len(v) for k, v in lev.items()}
+            ls = ['score', 'stability factor', 'num of reasonable moves', 'max(score) of reasonable',
+                  'min(score) of reasonable', 'faraction method', 'moves by depth']
+            tup = ('%.2f' % (init / 100), ('%.2f' % (stab * 100)) +
+                   '%', len(origg), max(origg), min(origg), b, mbydepth)
+            mystr=""
+            for a, b in zip(ls, tup):
+                mystr+=(a + ': ' + str(b)) + "\n"
+            return mystr
+
+        except Exception as e:
+            import traceback
+            print(traceback.format_exc())
     async def async_print_stats(self, curb, iswhite, full=True):
         if not full:
             lev = self.get_score(curb, iswhite)
@@ -255,7 +289,7 @@ class Calculator:
         init = self.get_score(cur_board, iswhite)
         arr, lev = self.calc_moves_score(cur_board, iswhite, init)
         g = np.array(arr, dtype="float64")
-        print(f"got {len(g)}")
+        
         g -= init
         g /= 100
 
@@ -276,7 +310,7 @@ class Calculator:
 
         g = np.exp(g)
         # geometric mean of
-        # stab = g.prod() ** (1 / len(g))
+        # stab = g.prod() ** (1 / len(g)) too sensitive
         # np.mean()
         stab = np.sum(g) / len(g)
         if stab > 0.99:

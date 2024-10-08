@@ -1,6 +1,9 @@
 import chess
 import chess.pgn
-# import numpy as np
+try:
+    import numpy as np
+except:
+    pass
 import io
 import sys
 from sunfish.tools import uci
@@ -11,8 +14,10 @@ import timeit
 if __name__ == '__main__':
     uci.sunfish=sunfish
 
-    # fen='r2Rr1k1/pp3pp1/2p2bbp/4n3/4pBP1/2Q1P1NP/PPP2P2/1K3B1R b - - 0 17'
-    fen=    'r2q1rk1/3nbppp/b1pp1n2/p3p3/1p1PP1P1/P5NP/1PP1NPB1/R1BQ1RK1 b - - 1 12' 
+    if sys.argv[1] == 'bb':
+        fen='r2Rr1k1/pp3pp1/2p2bbp/4n3/4pBP1/2Q1P1NP/PPP2P2/1K3B1R b - - 0 17'
+    elif sys.argv[1] == 'cc':
+        fen=    'r2q1rk1/3nbppp/b1pp1n2/p3p3/1p1PP1P1/P5NP/1PP1NPB1/R1BQ1RK1 b - - 1 12' 
     if sys.argv[1]!='aa':
         from calc import Calculator
         if sys.platform=='win32':
