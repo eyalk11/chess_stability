@@ -222,7 +222,12 @@ class Calculator:
     def print_stats(self, curb, iswhite, full=True):
         if asyncio.get_event_loop() is None:
             asyncio.set_event_loop(asyncio.new_event_loop())
-        asyncio.run(self.async_print_stats(curb, iswhite, full))
+
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            task = asyncio.ensure_future(self.async_print_stats(curb, iswhite, full))
+        else:
+            loop.run_until_complete(self.async_print_stats(curb, iswhite, full))
 
     async def async_ret_stats(self, curb, iswhite, full=True):
         if not full:
@@ -231,17 +236,18 @@ class Calculator:
             return mystr
 
         try:
-            init, origg, stab, b, lev, tactical = await self.calc_stability(curb, iswhite)
+            init, origg, stab, b, lev, tactical, stdev,mean = await self.calc_stability(curb, iswhite)
             evarr=list(map(lambda x: x[0], origg))
             mbydepth = dict(lev)
             if len(str(dict(lev))) > 2000:
                 mbydepth = {k: len(v) for k, v in lev.items()}
-            ls = ['score', 'stability all', 'stability same','stability diff', 'num of reasonable moves', 'max(score) of reasonable',
-                  'min(score) of reasonable', 'fraction method', 'moves by depth']
-            tup = ('%.2f' % (init / 100),('%.2f' % (stab[0] * 100)) +
+            ls = ['score', 'stability all', 'stability same','stability diff',  'num of reasonable moves', 'max(score) of reasonable',
+                  'min(score) of reasonable','mean' , 'stdev', 'fraction method', 'moves by depth']
+            tup = ('%.2f' % (init / 100),
+                   ('%.2f' % (stab[0] * 100)) +
             '%',('%.2f' % (stab[1] * 100)) +
             '%', ('%.2f' % (stab[2] * 100)) +
-                   '%', len(origg), max(evarr), min(evarr), b, mbydepth)
+                   '%',   len(origg), max(evarr), min(evarr), ('%.2f' % mean), ('%.2f' % stdev) , b, mbydepth)
             mystr="few available moves\n" if tactical else ""
             for a, b in zip(ls, tup):
                 mystr+=(a + ': ' + str(b)) + "\n"
@@ -293,12 +299,14 @@ class Calculator:
             g = (-1) * np.square(g) * self.SIGMA
 
             g = np.exp(g)
-            # assert(any(g>1))
             # geometric mean doesn't work well since sensitive to bad moves
             # stab = g.prod() ** (1 / len(g)) too sensitive
             # np.mean()
             stab = np.sum(g) / len(g)
             return stab,b 
+
+        data = np.array([x[0] for x in arr], dtype="float64")
+        pop_stdev = np.sqrt(np.mean((data - init)**2))
         same = [x[0] for x in arr if x[1] % 2 == 0 ]
         diff = [x[0] for x in arr if x[1] % 2 == 1 ]
         stabsame, b = calc_with_arr(same,iswhite)
@@ -310,9 +318,9 @@ class Calculator:
         elif np.isnan(stabdiff):
             stab=stabsame
         else:
-            stab = (stabsame* len(same) + stabdiff * len(diff)) / len(arr)
+            stab = (stabsame* len(same) + stabdiff * len(diff)) / len(arr) #could have taken data
 
         # if stab > 0.99:
             # print(g)
             # print(list(orig_vec))
-        return init, arr, (stab,stabsame,stabdiff) , b, lev , tactical
+        return init, arr, (stab,stabsame,stabdiff) , b, lev , tactical ,pop_stdev , data.mean()
