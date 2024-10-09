@@ -2,12 +2,12 @@ name: chess-env
 channels:
   - conda-forge
 dependencies:
-  - python
+  - python==3.10
   - numpy
   - pip
   - pip:
-    - chess
+    - chess==1.10.0
     - numpy
     - jupyter
     - aiostream
-    - git+https://github.com/thomasahle/sunfish
+    - git+https://github.com/eyalk11/sunfish

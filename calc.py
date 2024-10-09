@@ -7,7 +7,10 @@ import time
 from collections import defaultdict
 from queue import Queue
 import chess.engine
-import numpy as np
+try:
+    import numpy as np
+except:
+    pass
 from chess import Board
 from multiprocessing import  Pool, Manager, cpu_count
 from multiprocessing.pool import ThreadPool
@@ -44,12 +47,12 @@ class Calculator:
     STOCKFISHDEPTH = 10
     SIGMA = 5
     FRACFACTOR = 2.5
-    SCORECUTOFF = 70
+    SCORECUTOFF = 80
     STOCKFISHDEPTHWEAK = 3
     ELOWEAK = 1620
     SCORETHR = 40
     DODEPTH = 3
-    WEAKTIME= 0.02
+    WEAKTIME= 0.03
     STOCKFISHSTRONG=0.4
     @classmethod
     def from_engine_path(cls, path):
@@ -59,7 +62,7 @@ class Calculator:
     def eng_from_engine_path(cls, path):
         engine = chess.engine.SimpleEngine.popen_uci(path)
         weak = chess.engine.SimpleEngine.popen_uci(path)
-        #weak.configure({"UCI_LimitStrength": True, "UCI_Elo": cls.ELOWEAK})
+        # weak.configure({"UCI_LimitStrength": True, "UCI_Elo": cls.ELOWEAK})
         return (engine, weak)
 
     def __init__(self, path):
@@ -70,6 +73,10 @@ class Calculator:
         self.enginedic = defaultdict(
             lambda: Calculator.eng_from_engine_path(self.path))
         self.pool = None
+
+    def ret_timer(self):
+        global timer
+        return (timer.average_measured_time())
 
     def printtimer(self):
         global timer
@@ -110,9 +117,9 @@ class Calculator:
 
         if type(cc.relative) is chess.engine.Mate or type(cc.relative) is chess.engine.MateGiven:
             if cc.relative < chess.engine.Cp(-500):
-                return -5000
-            else:
                 return 5000
+            else:
+                return -5000
 
         if cc.relative.score() is None:
             print(cc)
@@ -128,7 +135,7 @@ class Calculator:
         return Move(i, j, prom)
 
     @timer.time_execution
-    def calc_moves_score_worker(self, curfen, white, curdep, maxdepth, oldeval, lastlevellen, tored, levelsmap, seq, reslist):
+    def calc_moves_score_worker(self, curfen, white, curdep, maxdepth, oldeval, lastlevellen, tored, levelsmap, seq, reslist,legalmovesdic, score=0):
         gid=str(randrange(0, 1000))
         cur = Board(fen=curfen)
         oldeval = self.get_score(cur, white, curdep !=
@@ -136,11 +143,12 @@ class Calculator:
 
         pos = uci.from_fen(*curfen.split(" "))
         ls = list(cur.generate_legal_moves())
+        legalmovesdic[curdep]+=len(ls)
         excepectnu = int(300 * 3 ** (curdep - 1))
         if tored or (curdep>=3 and len(ls)*lastlevellen>=excepectnu):
             ls = [(pos.value(t := self.get_mov_sunfish(m, not white)), m)
                   for m in ls]
-            ls = sorted(ls, reverse=True, key=lambda x: x[0])
+            ls.sort( reverse=True, key=lambda x: x[0])
             ls = list(filter(lambda x: x[0] < self.SCORETHR, ls))
             ls = ls[:5]
         else:
@@ -165,7 +173,7 @@ class Calculator:
             curlev = lastlevellen * len(moves)
             if curlev > excepectnu:
                 tored = True
-                moves = sorted(moves, key=lambda x: x[2], reverse=True)
+                moves.sort(key=lambda x: x[2], reverse=True)
                 e=int(excepectnu/4)
                 moves= moves[:e]
                 if curdep < maxdepth:
@@ -177,21 +185,22 @@ class Calculator:
             levelsmap[curdep].append((";".join(seq + [san]), ev, g))
             if curdep < maxdepth:
                 yield (curfen, not white, curdep + 1, maxdepth, ev, len(moves)
-                               * lastlevellen, tored, levelsmap, seq + [san], reslist)
-            else:
-                reslist+= [ev]
+                               * lastlevellen, tored, levelsmap, seq + [san], reslist,legalmovesdic,score+g * (1 if white else -1)) 
+
+            if curdep >= maxdepth -1:
+                reslist.append((ev,curdep,seq ,san,score))
 
     def calc_moves_score(self, cur, white, oldeval, depth=4):
-        global pool
         reslist=[]
         levelsmap = dict()
 
         if self.pool is None:
             # creates a pool of cpu_count() processes
             self.pool = ThreadPool(4)#cpu_count())
+        legalmovesdic=defaultdict(lambda: 0) 
 
         ngen=self.calc_moves_score_worker(cur.fen(), white, 1, depth, oldeval,
-                       1, False, levelsmap, [], reslist)
+                       1, False, levelsmap, [], reslist,legalmovesdic)
 
         def myfunc(x):
             if x is None:
@@ -208,7 +217,7 @@ class Calculator:
                 break 
 
 
-        return reslist, levelsmap
+        return reslist, levelsmap , legalmovesdic
 
     def print_stats(self, curb, iswhite, full=True):
         if asyncio.get_event_loop() is None:
@@ -222,15 +231,18 @@ class Calculator:
             return mystr
 
         try:
-            init, origg, stab, b, lev = await self.calc_stability(curb, iswhite)
+            init, origg, stab, b, lev, tactical = await self.calc_stability(curb, iswhite)
+            evarr=list(map(lambda x: x[0], origg))
             mbydepth = dict(lev)
             if len(str(dict(lev))) > 2000:
                 mbydepth = {k: len(v) for k, v in lev.items()}
-            ls = ['score', 'stability factor', 'num of reasonable moves', 'max(score) of reasonable',
+            ls = ['score', 'stability all', 'stability same','stability diff', 'num of reasonable moves', 'max(score) of reasonable',
                   'min(score) of reasonable', 'fraction method', 'moves by depth']
-            tup = ('%.2f' % (init / 100), ('%.2f' % (stab * 100)) +
-                   '%', len(origg), max(origg), min(origg), b, mbydepth)
-            mystr=""
+            tup = ('%.2f' % (init / 100),('%.2f' % (stab[0] * 100)) +
+            '%',('%.2f' % (stab[1] * 100)) +
+            '%', ('%.2f' % (stab[2] * 100)) +
+                   '%', len(origg), max(evarr), min(evarr), b, mbydepth)
+            mystr="few available moves\n" if tactical else ""
             for a, b in zip(ls, tup):
                 mystr+=(a + ': ' + str(b)) + "\n"
             return mystr
@@ -250,33 +262,57 @@ class Calculator:
         init = self.get_score(cur_board, iswhite)
         init = self.get_score(cur_board, iswhite)
         init = self.get_score(cur_board, iswhite)
-        arr, lev = self.calc_moves_score(cur_board, iswhite, init)
-        g = np.array(arr, dtype="float64")
-        
-        g -= init
-        g /= 100
+        arr, lev, legalmovesdic = self.calc_moves_score(cur_board, iswhite, init)
+        nlev=lev.copy() 
+        if type(nlev[1] ) is not int:
+            nlev = { k: len(v) for k,v in nlev.items()} 
+        movfraq=(nlev[1]/legalmovesdic[1] + nlev[2]/legalmovesdic[2])/2
+        tactical= (movfraq< 1/ 30) or ((nlev[1]+nlev[2]< 20))
 
-        orig_vec = np.copy(g)
-        b = False
-        if abs(init) > 200:
-            b = True
-            g = g / (init / 100) * self.FRACFACTOR  # TODO:to make continous...
-        else:
+
+                
+        def calc_with_arr(arr,iswhite):
+            g = np.array(arr, dtype="float64")
+            
+            g -= init
+            g /= 100
+
+            orig_vec = np.copy(g)
             b = False
-        # We only care about moves that make things worse, every good move can't contribute more than 1
-        if iswhite:
-            g[g > 0] = 0
+            if abs(init) > 200:
+                b = True
+                g = g / (init / 100) * self.FRACFACTOR  # TODO:to make continous...
+            else:
+                b = False
+            # We only care about moves that make things worse, every good move can't contribute more than 1
+            if iswhite:
+                g[g > 0] = 0
+            else:
+                g[g < 0] = 0
+
+            g = (-1) * np.square(g) * self.SIGMA
+
+            g = np.exp(g)
+            # assert(any(g>1))
+            # geometric mean doesn't work well since sensitive to bad moves
+            # stab = g.prod() ** (1 / len(g)) too sensitive
+            # np.mean()
+            stab = np.sum(g) / len(g)
+            return stab,b 
+        same = [x[0] for x in arr if x[1] % 2 == 0 ]
+        diff = [x[0] for x in arr if x[1] % 2 == 1 ]
+        stabsame, b = calc_with_arr(same,iswhite)
+        stabdiff, b2 = calc_with_arr(diff,not iswhite)
+        b=b2 or b
+        #if one of them is nan take the other one 
+        if np.isnan(stabsame):
+            stab=stabdiff
+        elif np.isnan(stabdiff):
+            stab=stabsame
         else:
-            g[g < 0] = 0
+            stab = (stabsame* len(same) + stabdiff * len(diff)) / len(arr)
 
-        g = (-1) * np.square(g) * self.SIGMA
-
-        g = np.exp(g)
-        # geometric mean of
-        # stab = g.prod() ** (1 / len(g)) too sensitive
-        # np.mean()
-        stab = np.sum(g) / len(g)
-        if stab > 0.99:
-            print(g)
-            print(list(orig_vec))
-        return init, orig_vec, stab, b, lev
+        # if stab > 0.99:
+            # print(g)
+            # print(list(orig_vec))
+        return init, arr, (stab,stabsame,stabdiff) , b, lev , tactical
