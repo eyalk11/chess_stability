@@ -7,10 +7,7 @@ import time
 from collections import defaultdict
 from queue import Queue
 import chess.engine
-try:
-    import numpy as np
-except:
-    pass
+import numpy as np
 from chess import Board
 from multiprocessing import  Pool, Manager, cpu_count
 from multiprocessing.pool import ThreadPool
@@ -283,7 +280,6 @@ class Calculator:
             g -= init
             g /= 100
 
-            orig_vec = np.copy(g)
             b = False
             if abs(init) > 200:
                 b = True
