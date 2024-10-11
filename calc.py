@@ -22,8 +22,19 @@ from sunfish.sunfish import parse, Move
 import multiprocessing as mp
 uci.sunfish = sunfish
 pool = None
+try:
+    from memozation import cached
+except:    
+    cached=None 
 
 from functools import wraps
+
+def optional_decorator(decorator,condition,*args,**kwargs):
+    def apply_decorator(func):
+        if condition and decorator is not None:  # Replace CONDITION with your condition
+            return decorator(func)
+        return func
+    return apply_decorator
 
 try:
     from execution_timer import ExecutionTimer
@@ -40,6 +51,53 @@ except:
 
 timer = ExecutionTimer()
 
+class ReturnValues:
+    def __init__ (self): 
+        self.score = 0
+        self.stability_all = 0
+        self.stability_same = 0
+        self.stability_diff = 0
+        self.num_of_reasonable_moves = []
+        self.max_score_of_reasonable = []
+        self.min_score_of_reasonable = []
+        self.mean = 0
+        self.stdev = 0
+        self.fraction_method = False
+        self.moves_by_depth = [] 
+
+    def assign(self, score, stability_all, stability_same, stability_diff, num_of_reasonable_moves, max_score_of_reasonable,
+                 min_score_of_reasonable, mean, stdev, fraction_method, moves_by_depth):
+        self.score = score
+        self.stability_all = stability_all
+        self.stability_same = stability_same
+        self.stability_diff = stability_diff
+        self.num_of_reasonable_moves = num_of_reasonable_moves
+        self.max_score_of_reasonable = max_score_of_reasonable
+        self.min_score_of_reasonable = min_score_of_reasonable
+        self.mean = mean
+        self.stdev = stdev
+        self.fraction_method = fraction_method
+        self.moves_by_depth = moves_by_depth
+
+    def format_stats(self):
+        ls = ['score', 'stability all', 'stability same','stability diff',  'num of reasonable moves', 'max(score) of reasonable',
+              'min(score) of reasonable','mean' , 'stdev', 'fraction method', 'moves by depth']
+        tup = (f"{self.score / 100:.2f}",
+               f"{self.stability_all * 100:.2f}%",
+               f"{self.stability_same * 100:.2f}%",
+               f"{self.stability_diff * 100:.2f}%",
+               len(self.num_of_reasonable_moves),
+               max(self.max_score_of_reasonable),
+               min(self.min_score_of_reasonable),
+               f"{self.mean:.2f}",
+               f"{self.stdev:.2f}",
+               self.fraction_method,
+               self.moves_by_depth)
+        mystr = "few available moves\n" if self.fraction_method else ""
+        for a, b in zip(ls, tup):
+            mystr += f"{a}: {b}\n"
+        return mystr
+
 class Calculator:
     STOCKFISHDEPTH = 10
     SIGMA = 5
@@ -49,8 +107,12 @@ class Calculator:
     ELOWEAK = 1620
     SCORETHR = 40
     DODEPTH = 3
-    WEAKTIME= 0.03
+    WEAKTIME= 0.02
     STOCKFISHSTRONG=0.4
+    UseWeakElo=False
+    UseCache=True
+    JustTop=False
+
     @classmethod
     def from_engine_path(cls, path):
         return Calculator(path)
@@ -59,7 +121,8 @@ class Calculator:
     def eng_from_engine_path(cls, path):
         engine = chess.engine.SimpleEngine.popen_uci(path)
         weak = chess.engine.SimpleEngine.popen_uci(path)
-        # weak.configure({"UCI_LimitStrength": True, "UCI_Elo": cls.ELOWEAK})
+        if cls.UseWeakElo:
+            weak.configure({"UCI_LimitStrength": True, "UCI_Elo": cls.ELOWEAK})
         return (engine, weak)
 
     def __init__(self, path):
@@ -184,7 +247,7 @@ class Calculator:
                 yield (curfen, not white, curdep + 1, maxdepth, ev, len(moves)
                                * lastlevellen, tored, levelsmap, seq + [san], reslist,legalmovesdic,score+g * (1 if white else -1)) 
 
-            if curdep >= maxdepth -1:
+            if (self.JustTop and curdep == maxdepth) or curdep >= maxdepth -1:
                 reslist.append((ev,curdep,seq ,san,score))
 
     def calc_moves_score(self, cur, white, oldeval, depth=4):
@@ -226,42 +289,33 @@ class Calculator:
         else:
             loop.run_until_complete(self.async_print_stats(curb, iswhite, full))
 
+    def custom_key_maker(self, curb, iswhite, full=True):
+        return curb.fen(), iswhite, full 
+
+    @optional_decorator(cached, UseCache,custom_key_maker=custom_key_maker) 
     async def async_ret_stats(self, curb, iswhite, full=True):
         if not full:
             lev = self.get_score(curb, iswhite)
-            mystr=(f"score: {lev / 100}")
+            mystr = f"score: {lev / 100}"
             return mystr
 
         try:
-            init, origg, stab, b, lev, tactical, stdev,mean = await self.calc_stability(curb, iswhite)
-            evarr=list(map(lambda x: x[0], origg))
-            mbydepth = dict(lev)
-            if len(str(dict(lev))) > 2000:
-                mbydepth = {k: len(v) for k, v in lev.items()}
-            ls = ['score', 'stability all', 'stability same','stability diff',  'num of reasonable moves', 'max(score) of reasonable',
-                  'min(score) of reasonable','mean' , 'stdev', 'fraction method', 'moves by depth']
-            tup = ('%.2f' % (init / 100),
-                   ('%.2f' % (stab[0] * 100)) +
-            '%',('%.2f' % (stab[1] * 100)) +
-            '%', ('%.2f' % (stab[2] * 100)) +
-                   '%',   len(origg), max(evarr), min(evarr), ('%.2f' % mean), ('%.2f' % stdev) , b, mbydepth)
-            mystr="few available moves\n" if tactical else ""
-            for a, b in zip(ls, tup):
-                mystr+=(a + ': ' + str(b)) + "\n"
-            return mystr
+            result = await self.calc_stability(curb, iswhite)
+            return result.format_stats()
 
         except Exception:
             import traceback
             print(traceback.format_exc())
 
-    async def async_print_stats(self, curb, iswhite, full=True):
-        print(await self.async_ret_stats(curb, iswhite, full))
+    async def async_print_stats(self, fen, iswhite, full=True):
+        print(await self.async_ret_stats(fen, iswhite, full))
 
     async def calc_stability(self, cur_board, iswhite):
         '''
         calcs stability by first getting score of all reasonable moves, then apply calculation(see readme).
         returns initial score, vector of diff vs initial score, stability factor, if fraction method
         '''
+        r=ReturnValues() 
         init = self.get_score(cur_board, iswhite)
         init = self.get_score(cur_board, iswhite)
         init = self.get_score(cur_board, iswhite)
@@ -269,21 +323,23 @@ class Calculator:
         nlev=lev.copy() 
         if type(nlev[1] ) is not int:
             nlev = { k: len(v) for k,v in nlev.items()} 
+        #better movfraq 
+        movfraq={x: nlev[x]/legalmovesdic[x] for x in legalmovesdic} 
+
+
         movfraq=(nlev[1]/legalmovesdic[1] + nlev[2]/legalmovesdic[2])/2
         tactical= (movfraq< 1/ 30) or ((nlev[1]+nlev[2]< 20))
 
-
-                
         def calc_with_arr(arr,iswhite):
             g = np.array(arr, dtype="float64")
-            
             g -= init
             g /= 100
 
             b = False
             if abs(init) > 200:
                 b = True
-                g = g / (init / 100) * self.FRACFACTOR  # TODO:to make continous...
+                # TODO:to make continous...
+                g = g / (init / 100) * self.FRACFACTOR 
             else:
                 b = False
             # We only care about moves that make things worse, every good move can't contribute more than 1
@@ -293,7 +349,6 @@ class Calculator:
                 g[g < 0] = 0
 
             g = (-1) * np.square(g) * self.SIGMA
-
             g = np.exp(g)
             # geometric mean doesn't work well since sensitive to bad moves
             # stab = g.prod() ** (1 / len(g)) too sensitive
@@ -314,9 +369,8 @@ class Calculator:
         elif np.isnan(stabdiff):
             stab=stabsame
         else:
-            stab = (stabsame* len(same) + stabdiff * len(diff)) / len(arr) #could have taken data
+            stab = (stabsame* len(same) + stabdiff * len(diff)) / len(arr)
 
-        # if stab > 0.99:
-            # print(g)
-            # print(list(orig_vec))
-        return init, arr, (stab,stabsame,stabdiff) , b, lev , tactical ,pop_stdev , data.mean()
+        r.assign(init, stab, stabsame, stabdiff, arr, data, data, data.mean(), pop_stdev, tactical, lev)
+        
+        return r
