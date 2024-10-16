@@ -223,20 +223,27 @@ class Calculator(object):
     PVDEPTH = 10 
     EXTENDED_STATS = False 
 
+    _config_loaded = False
+
+    @classmethod
+    def load_config(cls):
+        if not cls._config_loaded:
+            try:
+                import yaml
+                with open('config.yaml') as f:
+                    data = yaml.load(f, Loader=yaml.FullLoader)
+                    if 'Calculator' in data:
+                        for k, v in data['Calculator'].items():
+                            setattr(cls, k, v)
+                    if 'Logging' in data:
+                        logger.setLevel(getattr(logging, data['Logging']['level']))
+                cls._config_loaded = True
+            except Exception as e:
+                logger.warning(f"Failed to load config: {e}")
+
     def __new__(cls, *args, **kwargs):
-        inst=object.__new__(cls)
-        try:
-            import yaml
-            with open('config.yaml') as f:
-                data = yaml.load(f, Loader=yaml.FullLoader)
-                if 'Calculator' in data:
-                    for k,v in data['Calculator'].items():
-                        setattr(cls,k,v)
-                if 'Logging' in data:
-                    logger.setLevel(getattr(logging, data['Logging']['level']))
-        except:
-            pass
-        return inst
+        cls.load_config()
+        return super().__new__(cls)
 
     @classmethod
     def from_engine_path(cls, path):
@@ -348,67 +355,66 @@ class Calculator(object):
         return Move(i, j, prom)
 
     @timer.time_execution
-    def calc_moves_score_worker(self, cur, white, curdep, maxdepth, oldeval, lastlevellen, tored, levelsmap, seq, reslist,legalmovesdic, score=0):
-        def get_mov_val(mov):
+    def calc_moves_score_worker(self, current_board, is_white, current_depth, max_depth, previous_eval, last_level_length, to_reduce, levels_map, move_sequence, result_list, legal_moves_count, cumulative_score=0):
+        def get_move_value(move):
             try:
-                return pos.value(t := self.get_mov_sunfish(mov, not white))
+                return position.value(t := self.get_mov_sunfish(move, not is_white))
             except:
-                logger.error(f"Error in calc_moves_score_worker: {curfen} {mov}") 
+                logger.error(f"Error in calc_moves_score_worker: {current_fen} {move}") 
 
-        gid=str(randrange(0, 1000))
-        oldeval = self.get_score(cur, white, curdep !=
-                                 maxdepth, curdep / maxdepth,gid)
-        curfen=cur.fen()
+        game_id = str(randrange(0, 1000))
+        current_eval = self.get_score(current_board, is_white, current_depth != max_depth, current_depth / max_depth, game_id)
+        current_fen = current_board.fen()
 
-        pos = uci.from_fen(*curfen.split(" "))
-        ls = list(cur.generate_legal_moves())
-        legalmovesdic[curdep]+=len(ls)
-        excepectnu = int(300 * 3 ** (curdep - 1))
+        position = uci.from_fen(*current_fen.split(" "))
+        legal_moves = list(current_board.generate_legal_moves())
+        legal_moves_count[current_depth] += len(legal_moves)
+        expected_num = int(300 * 3 ** (current_depth - 1))
 
-        if tored or (curdep>=3 and len(ls)*lastlevellen>=excepectnu):
-            ls = [(get_mov_val(m), m)  for m in ls]
-            ls=list(filter(lambda x: x[0] is not None, ls) )
-            ls.sort( reverse=True, key=lambda x: x[0])
-            ls = list(filter(lambda x: x[0] < self.SCORETHR, ls))
-            ls = ls[:5]
+        if to_reduce or (current_depth >= 3 and len(legal_moves) * last_level_length >= expected_num):
+            move_values = [(get_move_value(move), move) for move in legal_moves]
+            move_values = list(filter(lambda x: x[0] is not None, move_values))
+            move_values.sort(reverse=True, key=lambda x: x[0])
+            move_values = list(filter(lambda x: x[0] < self.SCORETHR, move_values))
+            move_values = move_values[:5]
         else:
-            ls = [(1, m) for m in ls]
+            move_values = [(1, move) for move in legal_moves]
 
-        moves = []
-        for _, z in ls:
-            san =  cur.san(z)
-            cur.push(z)
-            ev = self.get_score(cur, not white, curdep !=
-                                maxdepth, curdep / maxdepth,gid)
-            g = ev - oldeval
-            if g < (-1) * self.SCORECUTOFF or g > self.SCORECUTOFF:
-                cur.pop()
+        analyzed_moves = []
+        for _, move in move_values:
+            san = current_board.san(move)
+            current_board.push(move)
+            new_eval = self.get_score(current_board, not is_white, current_depth != max_depth, current_depth / max_depth, game_id)
+            eval_diff = new_eval - current_eval
+            if eval_diff < (-1) * self.SCORECUTOFF or eval_diff > self.SCORECUTOFF:
+                current_board.pop()
                 continue
-            moves.append((cur.copy(), ev, g,san))
-            cur.pop()
+            analyzed_moves.append((current_board.copy(), new_eval, eval_diff, san))
+            current_board.pop()
 
-        # apply expectednu filter
-        if curdep > 2:
-            excepectnu = int(10 * 5 ** (curdep - 1))/2
-            curlev = lastlevellen * len(moves)
-            if curlev > excepectnu:
-                tored = True
-                moves.sort(key=lambda x: x[2], reverse=True)
-                e=int(excepectnu/4)
-                moves= moves[:e]
-                if curdep < maxdepth:
-                    maxdepth -= 1
+        # Apply expected number filter
+        if current_depth > 2:
+            expected_num = int(10 * 5 ** (current_depth - 1)) / 2
+            current_level = last_level_length * len(analyzed_moves)
+            if current_level > expected_num:
+                to_reduce = True
+                analyzed_moves.sort(key=lambda x: x[2], reverse=True)
+                limit = int(expected_num / 4)
+                analyzed_moves = analyzed_moves[:limit]
+                if current_depth < max_depth:
+                    max_depth -= 1
 
-        for (curb, ev, g, san) in moves:
-            if curdep not in levelsmap:
-                levelsmap[curdep] = []
-            levelsmap[curdep].append((";".join(seq + [san]), ev, g))
-            if curdep < maxdepth:
-                yield (curb, not white, curdep + 1, maxdepth, ev, len(moves)
-                               * lastlevellen, tored, levelsmap, seq + [san], reslist,legalmovesdic,score+g * (1 if white else -1)) 
+        for (board, eval, eval_diff, san) in analyzed_moves:
+            if current_depth not in levels_map:
+                levels_map[current_depth] = []
+            levels_map[current_depth].append((";".join(move_sequence + [san]), eval, eval_diff))
+            if current_depth < max_depth:
+                yield (board, not is_white, current_depth + 1, max_depth, eval, len(analyzed_moves) * last_level_length, 
+                       to_reduce, levels_map, move_sequence + [san], result_list, legal_moves_count, 
+                       cumulative_score + eval_diff * (1 if is_white else -1))
 
-            if (self.JustTop and curdep == maxdepth) or curdep >= maxdepth -1:
-                reslist.append((ev,curdep,seq+ [san] ,san,score))
+            if (self.JustTop and current_depth == max_depth) or current_depth >= max_depth - 1:
+                result_list.append((eval, current_depth, move_sequence + [san], san, cumulative_score))
 
     def calc_moves_score(self, cur, white, oldeval, depth=4):
         reslist=[]
@@ -599,3 +605,4 @@ class Calculator(object):
         r.assign(init, stab, stabsame, stabdiff, arr, data, data, data.mean(), pop_stdev, tactical, nlev if len(str(dict(lev))) > 300 else lev)
         
         return r
+
