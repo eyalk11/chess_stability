@@ -56,6 +56,7 @@ class MyFormatter(logging.Formatter):
 import logging
 logfile='calc.log' 
 logger = logging.getLogger() 
+logger.setLevel(logging.INFO)
 logger.addHandler(logging.StreamHandler()) 
 h=logging.FileHandler(logfile) 
 h.setFormatter(MyFormatter())
@@ -221,6 +222,7 @@ class Calculator(object):
     MAXTIMEPV = 5
     PVDEPTH = 10 
     EXTENDED_STATS = False 
+
     def __new__(cls, *args, **kwargs):
         inst=object.__new__(cls)
         try:
@@ -230,8 +232,10 @@ class Calculator(object):
                 if 'Calculator' in data:
                     for k,v in data['Calculator'].items():
                         setattr(cls,k,v)
+                if 'Logging' in data:
+                    logger.setLevel(getattr(logging, data['Logging']['level']))
         except:
-            pass 
+            pass
         return inst
 
     @classmethod
@@ -319,15 +323,15 @@ class Calculator(object):
     def convert_score(self, cc, white):
         if type(cc.relative) is chess.engine.Mate or type(cc.relative) is chess.engine.MateGiven:
             if cc.relative < chess.engine.Cp(-500):
-                return 5000
-            else:
                 return -5000
+            else:
+                return 5000
 
         if cc.relative.score() is None:
             print(cc)
             print(cc.score())
             #breakpoint()
-        return cc.relative.score() * (1 if not white else (-1))
+        return cc.relative.score() * (1 if  white else (-1))
 
     def convert_to_san(self,b,moves):
         cur=b.copy() 
