@@ -1,3 +1,4 @@
+from tabulate import tabulate
 import threading
 from functools import partial
 from copy import deepcopy 
@@ -75,7 +76,6 @@ try:
 except:    
     cached=None 
 
-from functools import wraps
 
 def optional_decorator(decorator,condition,*args,**kwargs):
     def apply_decorator(func):
@@ -126,6 +126,7 @@ class StabilityStats:
         self.stdev = 0
         self.fraction_method = False
         self.moves_by_depth = [] 
+        self.pv= []
 
     def assign(self, score, stability_all, stability_same, stability_diff, num_of_reasonable_moves, max_score_of_reasonable,
                  min_score_of_reasonable, mean, stdev, fraction_method, moves_by_depth):
@@ -141,8 +142,8 @@ class StabilityStats:
         self.fraction_method = fraction_method
         self.moves_by_depth = moves_by_depth
 
-    def format_stats(self):
 
+    def format_stats(self):
         dic_formats = {'score': '{:.2f}', 'stability all': '{:.2f}%', 'stability same': '{:.2f}%', 'stability diff': '{:.2f}%', 'same move frequency': '{:.2f}%', 'diff move frequency': '{:.2f}%', 'num of reasonable moves': '{}', 'max(score) of reasonable': '{}', 'min(score) of reasonable': '{}', 'mean': '{:.2f}', 'stdev': '{:.2f}', 'fraction method': '{}', 'moves by depth': '{}'}
         
         data = {
@@ -160,9 +161,20 @@ class StabilityStats:
             'fraction method': self.fraction_method,
             'moves by depth': self.moves_by_depth
         }
-        result_str = "Few available moves\n" if self.fraction_method else ""
-        for key, value in data.items():
-            result_str += f"{key}: {dic_formats[key].format(value)}\n"
+
+        result_str = f"Score: {dic_formats['score'].format(data['score'])}\n"
+        result_str += "Few available moves\n" if self.fraction_method else ""
+
+
+        table2 = []
+        table=[]
+        for t,d in list(self.pv.items()):
+            table2.append([f"{dic_formats['score'].format( d[0] /100 )}", f"{t.replace(';',' ')}",f"{'Y' if t[1] else ''}"])
+
+        for i,(key, value) in enumerate(list(data.items())[1:]):
+            table.append([key, dic_formats[key].format(value)] + (table2[i] if i<len(table2) else []))
+
+        result_str += tabulate(table, headers=['Stat', 'Value', 'SCORE' ,'PV','FOUND'], tablefmt='plain')
         return result_str
 
 class Calculator:
@@ -181,6 +193,8 @@ class Calculator:
     JustTop=False
     MINMOVES= 3
     ThreadPoolCount= 4
+    MAXTIMEPV = 3
+    PVDEPTH = 10 
 
     @classmethod
     def from_engine_path(cls, path):
@@ -203,6 +217,10 @@ class Calculator:
             lambda: Calculator.eng_from_engine_path(self.path))
         self.pool = None
         self.positions = {}
+        if self.UseCache: 
+            self.get_score = cached(custom_key_maker=self.custom_key_maker_score)(self.get_score)
+        if self.UseCache: 
+            self.calc_stability = cached(custom_key_maker=self.custom_key_maker)(self.calc_stability)
 
     def ret_timer(self):
         global timer
@@ -221,14 +239,17 @@ class Calculator:
     def custom_key_maker_score(self, b, white, weak=False, deprel=None,gid=None):
         return b.fen(), b.ply(), white, weak #three-fold things
 
-    def get_pv(self,b,max_depth):
-        engine=self.enginedic['nnn'][0]
-        res=engine.analyse(b,multipv=10,limit=chess.engine.Limit(depth=max_depth+2))
+    def get_pv(self,b,max_depth,curls):
+        engine=self.enginedic['kkk'][0]
+        res=engine.analyse(b,multipv=10,limit=chess.engine.Limit(depth=self.PVDEPTH,time=self.MAXTIMEPV))
+        
         for i in res:
-            yield i['pv'],self.convert_score(i)
+            sa= self.convert_to_san(b, i['pv'])
+            sa = ';'.join(str(x) for x in sa) 
+            curls.append((sa ,self.convert_score(i['score'],b.turn)))
 
     @timer.time_execution
-    @optional_decorator(cached, UseCache,custom_key_maker=custom_key_maker_score) 
+     
     def get_score(self, b, white, weak=False, deprel=None,gid=None):
         try:
             process_name = threading.current_thread().ident
@@ -268,6 +289,13 @@ class Calculator:
             print(cc.score())
             #breakpoint()
         return cc.relative.score() * (1 if not white else (-1))
+
+    def convert_to_san(self,b,moves):
+        cur=b.copy() 
+        for  z in moves:
+            yield cur.san(z)
+            cur.push(z)
+
 
     def get_mov_sunfish(self, mov, ply=0):
         move = mov.uci()
@@ -342,6 +370,8 @@ class Calculator:
     def calc_moves_score(self, cur, white, oldeval, depth=4):
         reslist=[]
         levelsmap = dict()
+         
+
 
         if self.pool is None:
             # creates a pool of cpu_count() processes
@@ -356,6 +386,9 @@ class Calculator:
                 return []
             return list(self.calc_moves_score_worker(*x ))
 
+        pv_moves=[] 
+        fut=self.pool.apply_async(self.get_pv, (cur,depth,pv_moves))
+
 
         while True: 
             gen=ngen
@@ -365,33 +398,41 @@ class Calculator:
             if len(ngen)==0:
                 break 
 
+        fut.get()
 
-        return reslist, levelsmap , legalmovesdic
-    def ret_stats(self,curb,iswhite,full=True):
-        return asyncio.run(self.async_ret_stats(curb,iswhite,full))
+        pv_moves_dic = dict( { y : (score,0) for y,score in pv_moves})
+
+        for ev,curdep,seq,san,score in reslist: 
+            s=';'.join(seq)
+            for t in pv_moves_dic:
+                if s.startswith(t):
+                    pv_moves_dic[t]=(pv_moves_dic[t][0],1) 
+
+        return reslist, levelsmap , legalmovesdic ,pv_moves_dic
+
     def print_stats(self, curb, iswhite, full=True):
-        if neverthrow(asyncio.get_event_loop) is None:
-            asyncio.set_event_loop(asyncio.new_event_loop())
+        #if neverthrow(asyncio.get_event_loop) is None:
+        asyncio.set_event_loop(asyncio.new_event_loop())
 
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            task = asyncio.ensure_future(self.async_print_stats(curb, iswhite, full))
+            asyncio.ensure_future(self.async_print_stats(curb, iswhite, full))
         else:
-            loop.run_until_complete(self.async_print_stats(curb, iswhite, full))
+            print(loop.run_until_complete(self.async_ret_stats(curb, iswhite, full)))
 
-    def custom_key_maker(self, curb, iswhite, full=True):
-        return curb.fen(), curb.ply(), iswhite, full #three-fold things
 
-    @optional_decorator(cached, UseCache,custom_key_maker=custom_key_maker) 
     async def async_ret_stats(self, curb, iswhite, full=True):
         with SimpleExceptionContext("async_ret_stats"):
             if not full:
                 lev = self.get_score(curb, iswhite)
                 mystr = f"score: {lev / 100}"
                 return mystr
+            else:
+                return self.ret_stats(curb, iswhite)
 
-            result = await self.calc_stability(curb, iswhite)
-            return result.format_stats()
+    def ret_stats(self, curb, iswhite):
+        result = self.calc_stability(curb, iswhite)
+        return result.format_stats()
 
 
     async def async_print_stats(self, fen, iswhite, full=True):
@@ -439,8 +480,11 @@ class Calculator:
 
 
 
+    def custom_key_maker(self,curb, iswhite):
+        return curb.fen(), curb.ply(), iswhite #three-fold things
 
-    async def calc_stability(self, cur_board, iswhite):
+    # @optional_decorator(cached, UseCache,custom_key_maker=custom_key_maker)
+    def calc_stability(self, cur_board, iswhite):
         '''
         calcs stability by first getting score of all reasonable moves, then apply calculation(see readme).
         returns initial score, vector of diff vs initial score, stability factor, if fraction method
@@ -450,7 +494,9 @@ class Calculator:
         init = self.get_score(cur_board, iswhite)
         init = self.get_score(cur_board, iswhite)
         init = self.get_score(cur_board, iswhite)
-        arr, lev, legalmovesdic = self.calc_moves_score(cur_board, iswhite, init)
+        arr, lev, legalmovesdic,pv_moves_dic  = self.calc_moves_score(cur_board, iswhite, init )
+        r.pv= pv_moves_dic 
+
         nlev=lev.copy() 
         if type(nlev[1] ) is not int:
             nlev = { k: len(v) for k,v in nlev.items()} 

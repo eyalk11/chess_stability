@@ -70,17 +70,20 @@ if __name__ == '__main__':
             STOCKFISHPATH='/home/jovyan/stockfish/src/stockfish'
 
         def my_function(): 
+            Calculator.UseCache=False
             mycalc=Calculator.from_engine_path(STOCKFISHPATH)
-            b=chess.Board(fen)
-            mycalc.print_stats(b,0)
-            mycalc.printtimer() 
+            tasks=[]
+            for _ in range(2):  # Two rounds
+                b=chess.Board(fen)
+                start_time = timeit.default_timer()
+                print(mycalc.ret_stats(b,0))
+                end_time = timeit.default_timer()
+                execution_time = end_time - start_time
+                print(f"The function took {execution_time} seconds to execute")
+            mycalc.printtimer()
             mycalc.end()
-        start_time = timeit.default_timer()
-        print('aaa')
+
         my_function()
-        end_time = timeit.default_timer()
-        execution_time = end_time - start_time
-        print(f"The function took {execution_time} seconds to execute")
 
 
 
