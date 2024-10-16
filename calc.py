@@ -112,7 +112,7 @@ def display_board(fen,iswhite,STOCKFISHPATH): #actually display fen
     #return mycalc
 
 class StabilityStats:
-    def __init__ (self): 
+    def __init__ (self,extended_stat=False,half_move_number=2):
         self.same_stab_frq=0 
         self.diff_stab_frq=0 
         self.score = 0
@@ -127,6 +127,8 @@ class StabilityStats:
         self.fraction_method = False
         self.moves_by_depth = [] 
         self.pv= []
+        self.extended_stat=extended_stat
+        self.half_move_number=half_move_number
 
     def assign(self, score, stability_all, stability_same, stability_diff, num_of_reasonable_moves, max_score_of_reasonable,
                  min_score_of_reasonable, mean, stdev, fraction_method, moves_by_depth):
@@ -142,8 +144,25 @@ class StabilityStats:
         self.fraction_method = fraction_method
         self.moves_by_depth = moves_by_depth
 
+    def format_move_with_numbering(self, moves, half_move_number):
+        formatted_moves = []
+        f=half_move_number%2
+        move_number=half_move_number//2 +1
+
+        for i, move in enumerate(moves):
+            if i == 0 and f:
+                formatted_moves.append(f"{move_number}. .. {move}")
+                move_number += 1
+            elif i % 2 == f:
+                formatted_moves.append(f"{move_number}. {move}")
+                move_number += 1
+            else:
+                formatted_moves.append(move)
+
+        return ' '.join(formatted_moves)
 
     def format_stats(self):
+        minimal_keys = ['score', 'stability all', 'stability same', 'stability diff', 'num of reasonable moves', 'moves by depth']
         dic_formats = {'score': '{:.2f}', 'stability all': '{:.2f}%', 'stability same': '{:.2f}%', 'stability diff': '{:.2f}%', 'same move frequency': '{:.2f}%', 'diff move frequency': '{:.2f}%', 'num of reasonable moves': '{}', 'max(score) of reasonable': '{}', 'min(score) of reasonable': '{}', 'mean': '{:.2f}', 'stdev': '{:.2f}', 'fraction method': '{}', 'moves by depth': '{}'}
         
         data = {
@@ -161,6 +180,8 @@ class StabilityStats:
             'fraction method': self.fraction_method,
             'moves by depth': self.moves_by_depth
         }
+        if not self.extended_stat:
+            data = {k: v for k, v in data.items() if k in minimal_keys}
 
         result_str = f"Score: {dic_formats['score'].format(data['score'])}\n"
         result_str += "Few available moves\n" if self.fraction_method else ""
@@ -169,15 +190,19 @@ class StabilityStats:
         table2 = []
         table=[]
         for t,d in list(self.pv.items()):
-            table2.append([f"{dic_formats['score'].format( d[0] /100 )}", f"{t.replace(';',' ')}",f"{'Y' if t[1] else ''}"])
+            table2.append([f"{dic_formats['score'].format( d[0] /100 )}", f"{self.format_move_with_numbering( t.split(';') ,self.half_move_number )}",f"{'Y' if d[1] else ''}"])
 
         for i,(key, value) in enumerate(list(data.items())[1:]):
             table.append([key, dic_formats[key].format(value)] + (table2[i] if i<len(table2) else []))
 
+        if len(table2)>len(table):
+            for i in range(len(table),len(table2)):
+                table.append(['','',table2[i][0],table2[i][1],table2[i][2]])
+
         result_str += tabulate(table, headers=['Stat', 'Value', 'SCORE' ,'PV','FOUND'], tablefmt='plain')
         return result_str
 
-class Calculator:
+class Calculator(object):
     STOCKFISHDEPTH = 10
     SIGMA = 5
     FRACFACTOR = 2.5
@@ -193,8 +218,21 @@ class Calculator:
     JustTop=False
     MINMOVES= 3
     ThreadPoolCount= 4
-    MAXTIMEPV = 3
+    MAXTIMEPV = 5
     PVDEPTH = 10 
+    EXTENDED_STATS = False 
+    def __new__(cls, *args, **kwargs):
+        inst=object.__new__(cls)
+        try:
+            import yaml
+            with open('config.yaml') as f:
+                data = yaml.load(f, Loader=yaml.FullLoader)
+                if 'Calculator' in data:
+                    for k,v in data['Calculator'].items():
+                        setattr(cls,k,v)
+        except:
+            pass 
+        return inst
 
     @classmethod
     def from_engine_path(cls, path):
@@ -207,6 +245,7 @@ class Calculator:
         if cls.UseWeakElo:
             weak.configure({"UCI_LimitStrength": True, "UCI_Elo": cls.ELOWEAK})
         return (engine, weak)
+
 
     def __init__(self, path):
 
@@ -241,7 +280,7 @@ class Calculator:
 
     def get_pv(self,b,max_depth,curls):
         engine=self.enginedic['kkk'][0]
-        res=engine.analyse(b,multipv=10,limit=chess.engine.Limit(depth=self.PVDEPTH,time=self.MAXTIMEPV))
+        res=engine.analyse(b,multipv=6,limit=chess.engine.Limit(depth=self.PVDEPTH,time=self.MAXTIMEPV))
         
         for i in res:
             sa= self.convert_to_san(b, i['pv'])
@@ -365,7 +404,7 @@ class Calculator:
                                * lastlevellen, tored, levelsmap, seq + [san], reslist,legalmovesdic,score+g * (1 if white else -1)) 
 
             if (self.JustTop and curdep == maxdepth) or curdep >= maxdepth -1:
-                reslist.append((ev,curdep,seq ,san,score))
+                reslist.append((ev,curdep,seq+ [san] ,san,score))
 
     def calc_moves_score(self, cur, white, oldeval, depth=4):
         reslist=[]
@@ -405,8 +444,9 @@ class Calculator:
         for ev,curdep,seq,san,score in reslist: 
             s=';'.join(seq)
             for t in pv_moves_dic:
-                if s.startswith(t):
-                    pv_moves_dic[t]=(pv_moves_dic[t][0],1) 
+                if s.startswith(t[:len(s)]):
+                    pv_moves_dic[t]=(pv_moves_dic[t][0],1)
+                    break
 
         return reslist, levelsmap , legalmovesdic ,pv_moves_dic
 
@@ -490,7 +530,7 @@ class Calculator:
         returns initial score, vector of diff vs initial score, stability factor, if fraction method
         '''
         # logger.info(f"calc_stability {cur_board.fen()} {iswhite}")
-        r=StabilityStats() 
+        r=StabilityStats(self.EXTENDED_STATS,cur_board.ply() )
         init = self.get_score(cur_board, iswhite)
         init = self.get_score(cur_board, iswhite)
         init = self.get_score(cur_board, iswhite)
