@@ -54,23 +54,25 @@ class MyFormatter(logging.Formatter):
 
 #add logging to file 
 import logging
-log_file='calc.log' 
-logger = logging.getLogger() 
-logger.setLevel(logging.INFO)
-logger.addHandler(logging.StreamHandler()) 
-file_handler = logging.FileHandler(log_file)
-file_handler.setFormatter(MyFormatter())
-logger.addHandler(file_handler)
-last_run_number = 0
-if log_file and MyFormatter.run_number is None:
-    if os.path.exists(log_file):
-        for line in open(log_file):
-             last_run_number = max(last_run_number, never_throw(lambda: int(re.search('Run (\d+) \|', line).group(1)), default=0))
+def start_logging():
+    log_file='calc.log' 
+    logger = logging.getLogger() 
+    logger.setLevel(logging.INFO)
+    logger.addHandler(logging.StreamHandler()) 
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setFormatter(MyFormatter())
+    logger.addHandler(file_handler)
+    last_run_number = 0
+    if log_file and MyFormatter.run_number is None:
+        if os.path.exists(log_file):
+            for line in open(log_file):
+                 last_run_number = max(last_run_number, never_throw(lambda: int(re.search('Run (\d+) \|', line).group(1)), default=0))
 
-    last_run_number += 1
-    MyFormatter.run_number = last_run_number
+        last_run_number += 1
+        MyFormatter.run_number = last_run_number
 
-logging.debug('Started')
+start_logging()
+logging.info('Started')
 
 try:
     from memoization import cached
@@ -102,14 +104,14 @@ timer = ExecutionTimer()
 
 
 #@simple_exception_handling("dispboard")
-def display_board(fen,iswhite,STOCKFISHPATH): #actually display fen
-    mycalc=Calculator(STOCKFISHPATH)
-    b=chess.Board(fen)
-    if iswhite is None:
-        iswhite= b.turn
+def display_board(board, is_white, STOCKFISHPATH):
+    mycalc = Calculator(STOCKFISHPATH)
+    board_copy = board.copy()
+    if is_white is None:
+        is_white = board_copy.turn
     #display( widgets.HTML(str(b._repr_svg_())))
 
-    return mycalc.ret_stats(b, iswhite)
+    return mycalc.ret_stats(board_copy, is_white)
     #return mycalc
 
 class Calculator(object):
@@ -131,12 +133,14 @@ class Calculator(object):
     MAXTIMEPV = 5
     PVDEPTH = 10 
     EXTENDED_STATS = False 
+    INCLUDE_PV = True  # New parameter added
+    IGNORE_CONFIG=False 
 
     _config_loaded = False
 
     @classmethod
     def load_config(cls):
-        if not cls._config_loaded:
+        if not cls._config_loaded and not cls.IGNORE_CONFIG:
             try:
                 import yaml
                 with open('config.yaml') as f:
@@ -339,7 +343,8 @@ class Calculator(object):
             return [] if x is None else list(self.calc_moves_score_worker(*x))
 
         pv_moves = [] 
-        future = self.pool.apply_async(self.get_pv, (current_board, depth, pv_moves))
+        if self.INCLUDE_PV:  # Only get PV if INCLUDE_PV is True
+            future = self.pool.apply_async(self.get_pv, (current_board, depth, pv_moves))
 
         while True: 
             current_gen = next_gen
@@ -349,16 +354,19 @@ class Calculator(object):
             if len(next_gen) == 0:
                 break 
 
-        future.get()
+        if self.INCLUDE_PV:
+            future.get()
 
-        pv_moves_dict = {move_sequence: (score, 0) for move_sequence, score in pv_moves}
+        pv_moves_dict = {}
+        if self.INCLUDE_PV:
+            pv_moves_dict = {move_sequence: (score, 0) for move_sequence, score in pv_moves}
 
-        for eval, _, sequence, _, _ in result_list: 
-            sequence_str = ';'.join(sequence)
-            for pv_sequence in pv_moves_dict:
-                if sequence_str.startswith(pv_sequence[:len(sequence_str)]):
-                    pv_moves_dict[pv_sequence] = (pv_moves_dict[pv_sequence][0], 1)
-                    break
+            for eval, _, sequence, _, _ in result_list: 
+                sequence_str = ';'.join(sequence)
+                for pv_sequence in pv_moves_dict:
+                    if sequence_str.startswith(pv_sequence[:len(sequence_str)]):
+                        pv_moves_dict[pv_sequence] = (pv_moves_dict[pv_sequence][0], 1)
+                        break
 
         return result_list, levels_map, legal_moves_dict, pv_moves_dict
 
@@ -373,18 +381,18 @@ class Calculator(object):
             print(loop.run_until_complete(self.async_ret_stats(curb, iswhite, full)))
 
 
-    async def async_ret_stats(self, curb, iswhite, full=True):
+    async def async_ret_stats(self, curb, iswhite, full=True, **kwargs):
         with SimpleExceptionContext("async_ret_stats"):
             if not full:
                 lev = self.get_score(curb, iswhite)
                 mystr = f"score: {lev / 100}"
                 return mystr
             else:
-                return self.ret_stats(curb, iswhite)
+                return self.ret_stats(curb, iswhite, **kwargs)
 
-    def ret_stats(self, curb, iswhite):
+    def ret_stats(self, curb, iswhite, format='plain'):
         result = self.calc_stability(curb, iswhite)
-        return result.format_stats()
+        return result.format_stats(format)
 
 
     async def async_print_stats(self, fen, iswhite, full=True):
@@ -397,29 +405,28 @@ class Calculator(object):
         return gam
 
     @simple_exception_handling("calc_entire")
-    def calc_entire_game(self,pgn):
-        def with_p(k,san,*args):
-            #tt=await self.async_ret_stats(*args)
-            tt=display_board(*args)
-            return k,san, tt
+    def calc_entire_game(self, pgn=None):
+        def with_p(k, san, *args):
+            tt = display_board(*args)
+            return k, san, tt
+
         gam = Calculator.get_game(pgn)
+        g = deepcopy(gam)
 
-        g=deepcopy(gam)
-
-        ls=[] 
-        k=0
-        with ProcessPoolExecutor(max_workers=7) as executor:
+        ls = []
+        k = 0
+        with ProcessPoolExecutor(max_workers=4) as executor:
             while True:
-                k+=1
-                prev=g.board()
-                g=g.next()
+                k += 1
+                prev = g.board()
+                g = g.next()
                 if not g:
                     break
-                b=g.board()
-                san= prev.san(g.move )
+                b = g.board()
+                san = prev.san(g.move)
 
-                if k>self.MINMOVES:
-                    f = executor.submit(display_board,b.fen(),g.turn,self.path)#(partial(with_p,k,san ) , b.fen(), g.turn)
+                if k > self.MINMOVES:
+                    f = executor.submit(display_board, b, g.turn, self.path)
                     ls.append(f)
 
         for t in ls:
@@ -436,6 +443,7 @@ class Calculator(object):
         return curb.fen(), curb.ply(), iswhite #three-fold things
 
     # @optional_decorator(cached, UseCache,custom_key_maker=custom_key_maker)
+    @timer.time_execution 
     def calc_stability(self, cur_board, iswhite):
         '''
         Calculates stability by first getting score of all reasonable moves, then applies calculation (see readme).
@@ -522,3 +530,5 @@ class Calculator(object):
             return stabsame
         else:
             return (stabsame * len(same) + stabdiff * len(diff)) / len(arr)
+
+

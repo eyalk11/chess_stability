@@ -1,0 +1,30 @@
+{
+    "manifest_version": 2,
+    "name": "Lichess Extension",
+    "version": "1.0",
+    "description": "A Chrome extension for Lichess",
+    "permissions": [
+        "activeTab",
+        "https://lichess.org/*"
+    ],
+    "background": {
+        "scripts": [
+            "background.js"
+        ],
+        "persistent": false
+    },
+    "content_scripts": [
+        {
+            "matches": [
+                "https://lichess.org/*"
+            ],
+            "js": [
+                "arrive.min.js",
+                "content.js"
+            ]
+        }
+    ],
+    "web_accessible_resources": [
+        "script.js"
+    ]
+}
